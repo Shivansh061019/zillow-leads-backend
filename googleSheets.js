@@ -1,12 +1,18 @@
 // googleSheets.js
-const { google } = require("googleapis");
-const keys = require("./zillow-lead-scraper-6e03a227f6df.json"); //replace with your service account key
+const { google } = require('googleapis');
+const serviceAccount = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
 
-const auth = new google.auth.JWT(keys.client_email, null, keys.private_key, [
-	"https://www.googleapis.com/auth/spreadsheets",
-]);
+const auth = new google.auth.JWT(
+  serviceAccount.client_email,
+  null,
+  serviceAccount.private_key,
+  ['https://www.googleapis.com/auth/spreadsheets']
+);
 
-const sheets = google.sheets({ version: "v4", auth });
+const sheets = google.sheets({ version: 'v4', auth });
+
+// Then your normal appendLeadsToSheet() function below...
+
 
 // Replace with your own Google Sheet ID
 const SPREADSHEET_ID = "1zRvzQROqa9b1-IcXLLGmPAlzWwMPLGTwtx3TblV3-Bk";
