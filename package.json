@@ -1,5 +1,7 @@
 {
   "dependencies": {
+    "axios": "^1.9.0",
+    "body-parser": "^2.2.0",
     "cors": "^2.8.5",
     "crypto": "^1.0.1",
     "dotenv": "^16.5.0",
@@ -7,8 +9,9 @@
     "express-rate-limit": "^7.5.0",
     "googleapis": "^148.0.0",
     "mongodb": "^6.16.0",
-    "mongoose": "^8.13.2",
-    "puppeteer": "^24.6.1",
+    "mongoose": "^8.14.0",
+    "puppeteer": "^24.7.2",
+    "razorpay": "^2.9.6",
     "stripe": "^18.0.0"
   },
   "scripts": {
