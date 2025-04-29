@@ -1,4 +1,3 @@
-// server.js
 const express = require("express");
 const cors = require("cors");
 const fs = require("node:fs");
@@ -17,18 +16,17 @@ require("./db");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Razorpay configuration
+// Razorpay setup
 const razorpay = new Razorpay({
 	key_id: process.env.RAZORPAY_KEY_ID,
 	key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 app.use("/webhook", bodyParser.raw({ type: "application/json" }));
 
-// Rate limiter for scrape route
+// Rate limiter
 app.use(
 	"/scrape",
 	rateLimit({
@@ -38,48 +36,63 @@ app.use(
 	}),
 );
 
-// Create Razorpay order
+// ✅ Create Razorpay Order
 app.post("/create-order", async (req, res) => {
 	try {
 		const options = {
-			amount: 1500 * 100, // ₹1500 in paise
+			amount: 1500 * 100, // INR 1500
 			currency: "INR",
 			receipt: `receipt_${Date.now()}`,
 		};
 		const order = await razorpay.orders.create(options);
 		res.json({ orderId: order.id, key: process.env.RAZORPAY_KEY_ID });
 	} catch (err) {
-		console.error("❌ Razorpay order error:", err.message);
-		res.status(500).json({ error: "Failed to create Razorpay order" });
+		console.error("❌ create-order error:", err.message);
+		res.status(500).json({ error: "Order creation failed" });
 	}
 });
 
-// Webhook to verify payment and issue token
-app.post("/webhook", async (req, res) => {
-	const signature = req.headers["x-razorpay-signature"];
-	const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
+// ✅ Verify Razorpay Payment
+app.post("/verify-payment", async (req, res) => {
+	try {
+		const { razorpay_order_id, razorpay_payment_id, razorpay_signature, zip } =
+			req.body;
 
-	const body = req.body;
-	const expectedSignature = crypto
-		.createHmac("sha256", secret)
-		.update(JSON.stringify(body))
-		.digest("hex");
+		const generated_signature = crypto
+			.createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+			.update(`${razorpay_order_id}|${razorpay_payment_id}`)
+			.digest("hex");
 
-	if (signature !== expectedSignature) {
-		console.error("❌ Invalid Razorpay webhook signature");
-		return res.sendStatus(400);
-	}
+		if (generated_signature !== razorpay_signature) {
+			return res.status(400).json({ error: "Invalid signature" });
+		}
 
-	if (body.event === "payment.captured") {
 		const token = generateToken();
 		await storeToken(token);
-		console.log(`✅ Payment received. Token issued: ${token}`);
-	}
 
-	res.sendStatus(200);
+		res.json({ url: `/scrape/${zip}?token=${token}` });
+	} catch (err) {
+		console.error("❌ verify-payment error:", err.message);
+		res.status(500).json({ error: "Verification failed" });
+	}
 });
 
-// Protected lead scraper route
+// ✅ Optional Razorpay Webhook
+app.post("/webhook", async (req, res) => {
+	const signature = req.headers["x-razorpay-signature"];
+	const expected = crypto
+		.createHmac("sha256", process.env.RAZORPAY_WEBHOOK_SECRET)
+		.update(req.body)
+		.digest("hex");
+
+	if (signature !== expected) {
+		return res.status(400).send("Invalid webhook signature");
+	}
+
+	res.status(200).send("Webhook OK");
+});
+
+// ✅ Scrape & Download Route
 app.get("/scrape/:zip", async (req, res) => {
 	const zip = req.params.zip;
 	const token = req.query.token;
@@ -90,6 +103,7 @@ app.get("/scrape/:zip", async (req, res) => {
 
 	try {
 		const rawData = await scrapeZillow(zip);
+
 		const rows = rawData.map((d) => [
 			d.address,
 			d.link,
@@ -105,19 +119,19 @@ app.get("/scrape/:zip", async (req, res) => {
 		const csv = rows
 			.map((r) => r.map((field) => `"${field}"`).join(","))
 			.join("\n");
+
 		const filePath = `leads_${zip}.csv`;
-
 		fs.writeFileSync(filePath, headers + csv);
-		await appendLeadsToSheet(rows);
 
+		await appendLeadsToSheet(rows);
 		res.download(filePath);
 	} catch (err) {
-		console.error("❌ Scraping failed:", err.message);
+		console.error("❌ scrape/:zip error:", err.message);
 		res.status(500).json({ error: "Scraping failed." });
 	}
 });
 
-// Start server
+// ✅ Start Server
 app.listen(PORT, () => {
 	console.log(`🚀 Server running at http://localhost:${PORT}`);
 });
