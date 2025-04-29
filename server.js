@@ -17,13 +17,20 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ✅ Middleware
+const allowedOrigins = ["https://zillow-leads.netlify.app", "http://localhost:3000"];
 app.use(cors({
-  origin: "https://zillow-leads.netlify.app",
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
   methods: ["GET", "POST"],
-  credentials: true
+  credentials: true,
 }));
 
-app.use(express.json()); // For parsing application/json
+app.use(express.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
 // ✅ Razorpay setup
@@ -53,53 +60,9 @@ app.post("/create-order", async (req, res) => {
     const order = await razorpay.orders.create(options);
     res.json({ orderId: order.id, key: process.env.RAZORPAY_KEY_ID });
   } catch (err) {
-    console.error("❌ create-order error:", err);
-    res.status(500).json({ error: "Order creation failed" });
+    console.error("❌ create-order error:", err.message, err.response?.data);
+    res.status(500).json({ error: "Order creation failed", details: err.message });
   }
-});
-
-// ✅ Verify Razorpay Payment
-app.post("/verify-payment", async (req, res) => {
-  try {
-    const {
-      razorpay_order_id,
-      razorpay_payment_id,
-      razorpay_signature,
-      zip,
-    } = req.body;
-
-    const generated_signature = crypto
-      .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
-      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
-      .digest("hex");
-
-    if (generated_signature !== razorpay_signature) {
-      return res.status(400).json({ error: "Invalid signature" });
-    }
-
-    const token = generateToken();
-    await storeToken(token);
-
-    res.json({ url: `/scrape/${zip}?token=${token}` });
-  } catch (err) {
-    console.error("❌ verify-payment error:", err.message);
-    res.status(500).json({ error: "Verification failed" });
-  }
-});
-
-// ✅ Razorpay Webhook (Optional)
-app.post("/webhook", express.raw({ type: 'application/json' }), (req, res) => {
-  const signature = req.headers["x-razorpay-signature"];
-  const expected = crypto
-    .createHmac("sha256", process.env.RAZORPAY_WEBHOOK_SECRET)
-    .update(req.body)
-    .digest("hex");
-
-  if (signature !== expected) {
-    return res.status(400).send("Invalid webhook signature");
-  }
-
-  res.status(200).send("Webhook OK");
 });
 
 // ✅ Scraping and CSV Download
@@ -113,7 +76,6 @@ app.get("/scrape/:zip", async (req, res) => {
 
   try {
     const rawData = await scrapeZillow(zip);
-
     const rows = rawData.map((d) => [
       d.address,
       d.link,
