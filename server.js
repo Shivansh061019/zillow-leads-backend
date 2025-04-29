@@ -22,9 +22,11 @@ const razorpay = new Razorpay({
 	key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-app.use(cors());
-app.use(express.json());
-app.use("/webhook", bodyParser.raw({ type: "application/json" }));
+app.use(cors({
+	origin: 'https://zillow-leads.netlify.app', // allow frontend URL
+	methods: ['GET', 'POST'], // adjust as needed
+	credentials: true
+  }));
 
 // Rate limiter
 app.use(
