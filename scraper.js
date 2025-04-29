@@ -33,7 +33,10 @@ async function tryScrapeDetailPage(page, url, retries = 3) {
 
 async function scrapeZillow(zipCode) {
 	const url = `https://www.zillow.com/homes/${zipCode}_rb/`;
-	const browser = await puppeteer.launch({ headless: true });
+	const browser = await puppeteer.launch({
+  headless: true,
+  args: ["--no-sandbox", "--disable-setuid-sandbox"],
+});
 	const page = await browser.newPage();
 	await page.goto(url, { waitUntil: "domcontentloaded" });
 	await page.waitForTimeout(5000);
