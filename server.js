@@ -53,8 +53,8 @@ app.post("/create-order", async (req, res) => {
     const order = await razorpay.orders.create(options);
     res.json({ orderId: order.id, key: process.env.RAZORPAY_KEY_ID });
   } catch (err) {
-    console.error("❌ create-order error:", err);
-    res.status(500).json({ error: "Order creation failed" });
+    console.error("❌ create-order error:", JSON.stringify(err, null, 2));
+    res.status(500).json({ error: err.message || "Order creation failed" });
   }
 });
 
