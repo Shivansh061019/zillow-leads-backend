@@ -16,93 +16,74 @@ require("./db");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ✅ Middleware
-app.use(cors({
-  origin: "https://zillow-leads.netlify.app",
-  methods: ["GET", "POST"],
-  credentials: true
-}));
-
-app.use(express.json()); // For parsing application/json
-app.use(bodyParser.urlencoded({ extended: true }));
-
-// ✅ Razorpay setup
+// Razorpay configuration
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-// ✅ Rate Limiter
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use("/webhook", bodyParser.raw({ type: "application/json" }));
+
+// Rate limiter for scrape route
 app.use(
   "/scrape",
   rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 10,
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 10, // Limit each IP to 10 requests per windowMs
     message: "Too many requests. Please try again later.",
   })
 );
 
-// ✅ Create Razorpay Order
+// Create Razorpay order
 app.post("/create-order", async (req, res) => {
   try {
     const options = {
-      amount: 1500 * 100, // Rs. 1500
+      amount: 1500 * 100, // ₹1500 in paise
       currency: "INR",
       receipt: `receipt_${Date.now()}`,
     };
     const order = await razorpay.orders.create(options);
     res.json({ orderId: order.id, key: process.env.RAZORPAY_KEY_ID });
   } catch (err) {
-    console.error("❌ create-order error:", JSON.stringify(err, null, 2));
-    res.status(500).json({ error: err.message || "Order creation failed" });
+    console.error("❌ Razorpay order error:", err.message);
+    res.status(500).json({ error: "Failed to create Razorpay order" });
   }
 });
 
-// ✅ Verify Razorpay Payment
-app.post("/verify-payment", async (req, res) => {
+// Webhook to verify payment and issue token
+app.post("/webhook", async (req, res) => {
   try {
-    const {
-      razorpay_order_id,
-      razorpay_payment_id,
-      razorpay_signature,
-      zip,
-    } = req.body;
+    const signature = req.headers["x-razorpay-signature"];
+    const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
 
-    const generated_signature = crypto
-      .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
-      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+    const body = req.body;
+    const expectedSignature = crypto
+      .createHmac("sha256", secret)
+      .update(JSON.stringify(body))
       .digest("hex");
 
-    if (generated_signature !== razorpay_signature) {
-      return res.status(400).json({ error: "Invalid signature" });
+    if (signature !== expectedSignature) {
+      console.error("❌ Invalid Razorpay webhook signature");
+      return res.sendStatus(400);
     }
 
-    const token = generateToken();
-    await storeToken(token);
+    if (body.event === "payment.captured") {
+      const token = generateToken();
+      await storeToken(token);
+      console.log(`✅ Payment received. Token issued: ${token}`);
+    }
 
-    res.json({ url: `/scrape/${zip}?token=${token}` });
+    res.sendStatus(200);
   } catch (err) {
-    console.error("❌ verify-payment error:", err.message);
-    res.status(500).json({ error: "Verification failed" });
+    console.error("❌ Webhook error:", err.message);
+    res.status(500).json({ error: "Webhook processing failed" });
   }
 });
 
-// ✅ Razorpay Webhook (Optional)
-app.post("/webhook", express.raw({ type: 'application/json' }), (req, res) => {
-  const signature = req.headers["x-razorpay-signature"];
-  const expected = crypto
-    .createHmac("sha256", process.env.RAZORPAY_WEBHOOK_SECRET)
-    .update(req.body)
-    .digest("hex");
-
-  if (signature !== expected) {
-    return res.status(400).send("Invalid webhook signature");
-  }
-
-  res.status(200).send("Webhook OK");
-});
-
-// ✅ Scraping and CSV Download
+// Protected lead scraper route
 app.get("/scrape/:zip", async (req, res) => {
   const zip = req.params.zip;
   const token = req.query.token;
@@ -113,7 +94,6 @@ app.get("/scrape/:zip", async (req, res) => {
 
   try {
     const rawData = await scrapeZillow(zip);
-
     const rows = rawData.map((d) => [
       d.address,
       d.link,
@@ -124,21 +104,24 @@ app.get("/scrape/:zip", async (req, res) => {
       d.verificationScore || 0,
     ]);
 
-    const headers = "Address,Link,Agent Name,Phone,Email,Verification Result,Verification Score\n";
-    const csv = rows.map((r) => r.map((field) => `"${field}"`).join(",")).join("\n");
-
+    const headers =
+      "Address,Link,Agent Name,Phone,Email,Verification Result,Verification Score\n";
+    const csv = rows
+      .map((r) => r.map((field) => `"${field}"`).join(","))
+      .join("\n");
     const filePath = `leads_${zip}.csv`;
-    fs.writeFileSync(filePath, headers + csv);
 
+    fs.writeFileSync(filePath, headers + csv);
     await appendLeadsToSheet(rows);
+
     res.download(filePath);
   } catch (err) {
-    console.error("❌ scrape/:zip error:", err.message);
+    console.error("❌ Scraping failed:", err.message);
     res.status(500).json({ error: "Scraping failed." });
   }
 });
 
-// ✅ Start Server
+// Start server
 app.listen(PORT, () => {
   console.log(`🚀 Server running at http://localhost:${PORT}`);
 });
