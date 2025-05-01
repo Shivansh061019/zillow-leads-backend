@@ -1,106 +1,86 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const cors = require("cors");
+const dotenv = require("dotenv");
+const Razorpay = require("razorpay");
 const fs = require("fs");
 const bodyParser = require("body-parser");
-const rateLimit = require("express-rate-limit");
-const Razorpay = require("razorpay");
-const crypto = require("crypto");
-const dotenv = require("dotenv");
-dotenv.config();
+const path = require("path");
 
-const appendLeadsToSheet = require("./googleSheets");
-const scrapeZillow = require("./scraper");
+const connectDB = require("./db");
+const verifyEmail = require("./verifyEmail");
 const { generateToken, storeToken, isTokenValid } = require("./tokenService");
-require("./db");
+const scrapeZillowLeads = require("./scraper");
+
+dotenv.config();
+connectDB();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ✅ Middleware
-const allowedOrigins = ["https://zillow-leads.netlify.app", "http://localhost:3000"];
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error("Not allowed by CORS"));
-    }
-  },
-  methods: ["GET", "POST"],
-  credentials: true,
-}));
+// Enable CORS for all origins (or specify Netlify domain for tighter security)
+app.use(cors({ origin: "*" }));
 
-app.use(express.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json());
+app.use(express.static("public"));
 
-// ✅ Razorpay setup
+// Razorpay setup
 const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET,
+	key_id: process.env.RAZORPAY_KEY_ID,
+	key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-// ✅ Rate Limiter
-app.use(
-  "/scrape",
-  rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 10,
-    message: "Too many requests. Please try again later.",
-  })
-);
+// ---------------------- ROUTES ----------------------
 
-// ✅ Create Razorpay Order
+// ✅ Health check
+app.get("/", (req, res) => {
+	res.send("Zillow Lead Scraper Backend is running!");
+});
+
+// ✅ Create Razorpay order
 app.post("/create-order", async (req, res) => {
-  try {
-    const options = {
-      amount: 1500 * 100, // Rs. 1500
-      currency: "INR",
-      receipt: `receipt_${Date.now()}`,
-    };
-    const order = await razorpay.orders.create(options);
-    res.json({ orderId: order.id, key: process.env.RAZORPAY_KEY_ID });
-  } catch (err) {
-    console.error("❌ create-order error:", err.message, err.response?.data);
-    res.status(500).json({ error: "Order creation failed", details: err.message });
-  }
+	try {
+		const options = {
+			amount: 29900, // ₹299.00
+			currency: "INR",
+			receipt: `order_rcptid_${Date.now()}`,
+		};
+		const order = await razorpay.orders.create(options);
+		res.json(order);
+	} catch (error) {
+		console.error("❌ create-order error:", error);
+		res.status(500).json({ error: "Order creation failed" });
+	}
 });
 
-// ✅ Scraping and CSV Download
-app.get("/scrape/:zip", async (req, res) => {
-  const zip = req.params.zip;
-  const token = req.query.token;
+// ✅ Razorpay Webhook
+app.post("/verify-payment", async (req, res) => {
+	try {
+		const paymentData = req.body;
 
-  if (!token || !(await isTokenValid(token))) {
-    return res.status(403).json({ error: "Unauthorized or expired token." });
-  }
+		// Log incoming webhook (optional)
+		console.log("✅ Webhook received:", paymentData);
 
-  try {
-    const rawData = await scrapeZillow(zip);
-    const rows = rawData.map((d) => [
-      d.address,
-      d.link,
-      d.agentName,
-      d.phone,
-      d.email,
-      d.verificationResult || "N/A",
-      d.verificationScore || 0,
-    ]);
+		// Verify if Razorpay signature is valid (optional security)
+		// Note: add webhook secret logic if needed here
 
-    const headers = "Address,Link,Agent Name,Phone,Email,Verification Result,Verification Score\n";
-    const csv = rows.map((r) => r.map((field) => `"${field}"`).join(",")).join("\n");
+		// Trigger your Zillow scrape logic
+		const leads = await scrapeZillowLeads(); // make sure this returns data
+		const timestamp = Date.now();
+		const filePath = path.join(__dirname, `leads_${timestamp}.csv`);
 
-    const filePath = `leads_${zip}.csv`;
-    fs.writeFileSync(filePath, headers + csv);
+		const csvContent = leads.map((lead) => Object.values(lead).join(",")).join("\n");
+		fs.writeFileSync(filePath, csvContent);
 
-    await appendLeadsToSheet(rows);
-    res.download(filePath);
-  } catch (err) {
-    console.error("❌ scrape/:zip error:", err.message);
-    res.status(500).json({ error: "Scraping failed." });
-  }
+		res.status(200).json({ message: "Payment verified and CSV created", file: filePath });
+	} catch (err) {
+		console.error("❌ verify-payment error:", err);
+		res.status(500).json({ error: "Webhook processing failed" });
+	}
 });
 
-// ✅ Start Server
+// ----------------------------------------------------
+
 app.listen(PORT, () => {
-  console.log(`🚀 Server running at http://localhost:${PORT}`);
+	console.log(`🚀 Server running at http://localhost:${PORT}`);
 });
