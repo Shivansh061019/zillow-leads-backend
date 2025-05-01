@@ -41,15 +41,24 @@ app.get("/", (req, res) => {
 app.post("/create-order", async (req, res) => {
 	try {
 		const options = {
-			amount: 29900, // ₹299.00
+			amount: 1500 * 100, // ₹1500 in paise
 			currency: "INR",
-			receipt: `order_rcptid_${Date.now()}`,
+			receipt: `receipt_${Date.now()}`,
 		};
 		const order = await razorpay.orders.create(options);
-		res.json(order);
-	} catch (error) {
-		console.error("❌ create-order error:", error);
-		res.status(500).json({ error: "Order creation failed" });
+
+		res.status(200).json({
+			id: order.id,
+			amount: order.amount,
+			currency: order.currency,
+			key: process.env.RAZORPAY_KEY_ID,
+		});
+	} catch (err) {
+		console.error("❌ create-order error:", err);
+		res.status(500).json({
+			error: "Order creation failed",
+			details: err.message || err,
+		});
 	}
 });
 
